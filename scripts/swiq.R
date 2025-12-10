@@ -31,7 +31,8 @@ swiq <- function(y,
                  correction_mode=1,
                  window_size=50,
                  correct_alleles=F,
-                 correction_mat=NULL){
+                 correction_mat=NULL,
+                 min_freq=10){
   if(!is.data.frame(x)){
     x <- data.frame(x)
   }
@@ -60,7 +61,8 @@ swiq <- function(y,
                                   x = x,
                                   correction_mode=correction_mode,
                                   window_size=window_size,
-                                  correction_mat=correction_mat)
+                                  correction_mat=correction_mat,
+                                  min_freq=min_freq)
     }
     imps <- imps>0
     if(NA.correction){
@@ -247,14 +249,19 @@ correct_importances <- function(imps,
                                 x,
                                 correction_mode,
                                 window_size,
-                                correction_mat){
+                                correction_mat,
+                                min_freq){
   if(correction_mode==1){
-    n_0 <- colSums(x==0,na.rm=T)
-    n_1 <- colSums(x==1,na.rm=T)
-    mean_0 <- rowSums(imps*t(x==0),na.rm=T)/n_0
-    mean_1 <- rowSums(imps*t(x==1),na.rm=T)/n_1
-    new_mean <- pmin(mean_0,mean_1)
-    imps_cor <- (imps-mean_0+new_mean)*t(x==0)+(imps-mean_1+new_mean)*t(x==1)
+    # n_0 <- colSums(x==0,na.rm=T)
+    # n_1 <- colSums(x==1,na.rm=T)
+    # mean_0 <- rowSums(imps*t(x==0),na.rm=T)/n_0
+    # mean_1 <- rowSums(imps*t(x==1),na.rm=T)/n_1
+    # new_mean <- pmin(mean_0,mean_1)
+    # imps_cor <- (imps-mean_0+new_mean)*t(x==0)+(imps-mean_1+new_mean)*t(x==1)
+    imps_cor <- correct_importances_generalized(imps = imps,
+                                                x = x,
+                                                exclude = exclude,
+                                                min_freq=min_freq)
     return(imps_cor)
   }
   if(correction_mode==2){
@@ -323,8 +330,8 @@ correct_importances_generalized <- function(imps,x,exclude,freq_min){
   
   mean_a <- n_a
   for(a in 1:max_allele){
-    n_a[a,] <- colSums(x==a)
-    mean_a[a,] <- rowMeans(imps*t(x==a))
+    n_a[a,] <- colSums(x==a,na.rm=T)
+    mean_a[a,] <- rowSums(imps*t(x==a),na.rm=T)/n_a[a,]
   }
   rm_alleles <- which(n_a<freq_min,arr.ind=T)
   for(i in 1:nrow(rm_alleles)){
@@ -337,7 +344,9 @@ correct_importances_generalized <- function(imps,x,exclude,freq_min){
   #new_mean <- (mean_0*n_0+mean_1*n_1)/(n_0+n_1)
   new_mean <- apply(mean_a,2,min,na.rm=T)
   clean_imps <- lapply(1:max_allele,FUN=function(a){
-    (imps-mean_a[a,])*t(x==a)
+    out <- (imps-mean_a[a,])*t(x==a)
+    out[is.na(out)] <- 0
+    return(out)
   })
   clean_imps <- Reduce(f = "+",clean_imps)
   imps_cor <- clean_imps+new_mean
