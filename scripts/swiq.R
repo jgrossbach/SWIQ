@@ -32,7 +32,7 @@ swiq <- function(y,
                  window_size=50,
                  correct_alleles=F,
                  correction_mat=NULL,
-                 min_freq=10){
+                 freq_min=10){
   if(!is.data.frame(x)){
     x <- data.frame(x)
   }
@@ -62,7 +62,7 @@ swiq <- function(y,
                                   correction_mode=correction_mode,
                                   window_size=window_size,
                                   correction_mat=correction_mat,
-                                  min_freq=min_freq)
+                                  freq_min=freq_min)
     }
     imps <- imps>0
     if(NA.correction){
@@ -250,7 +250,7 @@ correct_importances <- function(imps,
                                 correction_mode,
                                 window_size,
                                 correction_mat,
-                                min_freq){
+                                freq_min){
   if(correction_mode==1){
     # n_0 <- colSums(x==0,na.rm=T)
     # n_1 <- colSums(x==1,na.rm=T)
@@ -261,7 +261,7 @@ correct_importances <- function(imps,
     imps_cor <- correct_importances_generalized(imps = imps,
                                                 x = x,
                                                 exclude = exclude,
-                                                min_freq=min_freq)
+                                                freq_min=freq_min)
     return(imps_cor)
   }
   if(correction_mode==2){
@@ -334,12 +334,15 @@ correct_importances_generalized <- function(imps,x,exclude,freq_min){
     mean_a[a,] <- rowSums(imps*t(x==a),na.rm=T)/n_a[a,]
   }
   rm_alleles <- which(n_a<freq_min,arr.ind=T)
-  for(i in 1:nrow(rm_alleles)){
-    m <- rm_alleles[i,2]
-    a <- rm_alleles[i,1]
-    imps[m,x[,m]==a] <- NA
+  if(nrow(rm_alleles)>0){
+    for(i in 1:nrow(rm_alleles)){
+      m <- rm_alleles[i,2]
+      a <- rm_alleles[i,1]
+      imps[m,x[,m]==a] <- NA
+    }
+    mean_a[rm_alleles] <- NA
   }
-  mean_a[rm_alleles] <- NA
+
   new_mean <- mean_a*n_a
   #new_mean <- (mean_0*n_0+mean_1*n_1)/(n_0+n_1)
   new_mean <- apply(mean_a,2,min,na.rm=T)
