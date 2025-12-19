@@ -32,7 +32,11 @@ swiq <- function(y,
                  window_size=50,
                  correct_alleles=F,
                  correction_mat=NULL,
-                 freq_min=10){
+                 freq_min=10,
+                 rm.overtraining=F,
+                 min_use=1){
+  require(ranger)
+  require(abind)
   if(!is.data.frame(x)){
     x <- data.frame(x)
   }
@@ -53,7 +57,9 @@ swiq <- function(y,
                    min.node.size = min.node.size,
                    NA.correction = NA.correction,
                    multi = multi,
-                   imp.blocks = imp.blocks)
+                   imp.blocks = imp.blocks,
+                   rm.overtraining=rm.overtraining,
+                   min_use=min_use)
   if(method=="binomial"){
     if(correct_alleles){
       imps[imps==0] <- NA
@@ -343,9 +349,14 @@ correct_importances_generalized <- function(imps,x,exclude,freq_min){
     mean_a[rm_alleles] <- NA
   }
 
-  new_mean <- mean_a*n_a
+  #new_mean <- mean_a*n_a
   #new_mean <- (mean_0*n_0+mean_1*n_1)/(n_0+n_1)
-  new_mean <- apply(mean_a,2,min,na.rm=T)
+  #new_mean <- apply(mean_a,2,min,na.rm=T)
+  new_mean <- apply(mean_a,2,FUN=function(a){
+    max_a <- which.max(a,na.rm=T)
+    rest_a <- a[-max_a]
+    return(mean(rest_a,na.rm=T))
+  })
   clean_imps <- lapply(1:max_allele,FUN=function(a){
     out <- (imps-mean_a[a,])*t(x==a)
     out[is.na(out)] <- 0
@@ -365,7 +376,9 @@ get_imps <- function(x,
                      min.node.size=NULL,
                      NA.correction=F,
                      multi=F,
-                     imp.blocks=4){
+                     imp.blocks=4,
+                     rm.overtraining=F,
+                     min_use=min_use){
   if(multi){
     imps <- matrix(0,nrow = nrow(x),ncol = ncol(x))
     for(i in 1:imp.blocks){
@@ -384,7 +397,8 @@ get_imps <- function(x,
                    num.trees = ceiling(num.trees/imp.blocks),
                    num.threads = num.threads,
                    min.bucket = min.bucket,
-                   min.node.size = min.node.size)
+                   min.node.size = min.node.size,
+                   keep.inbag = T)
       imps <- imps+rf$variable.importance.local
     }
     imps <- t(imps)
@@ -396,9 +410,18 @@ get_imps <- function(x,
                  num.trees = num.trees,
                  num.threads = num.threads,
                  min.bucket = min.bucket,
-                 min.node.size = min.node.size)
+                 min.node.size = min.node.size,
+                 keep.inbag = T)
     imps <- t(rf$variable.importance.local)
     
+  }
+  marker_used <- sapply(1:rf$num.trees,FUN=function(nt){
+    1:ncol(x)%in%(treeInfo(rf,nt)[,"splitvarID"]+1)
+  })
+  sf <- rowSums(marker_used)
+  imps[sf<min_use,] <- 0
+  if(rm.overtraining){
+    imps <- remove_overtraining(imps=imps,rf=rf,x=x,y=y)
   }
   return(imps)
 }
@@ -429,7 +452,8 @@ estimate_correction <- function(x,
                      min.node.size = min.node.size,
                      NA.correction = NA.correction,
                      multi = multi,
-                     imp.blocks = imp.blocks)
+                     imp.blocks = imp.blocks,
+                     rm.overtraining=rm.overtraining)
     for(a_i in 0:(max_allele-1)){
       allele_bias[,a_i+1] <- allele_bias[,a_i+1]+rowSums((t(x)==a_i)*imps)/rowSums(t(x)==a_i)
     }
@@ -477,4 +501,196 @@ gg_dotplot <- function(x, y,
   }
   
   return(p)
+}
+
+remove_overtraining <- function(imps,rf,x,y){
+  
+  #find out in which node a sample will end up in without permutations
+  preds_real <- predict(object = rf,
+                        data = x,
+                        predict.all = T,
+                        type="terminalNodes",
+                        num.threads=0)$predictions
+  
+  #see what a samples prediction would be without any permutations
+  preds_y <- predict(object = rf,
+                     data = x,
+                     predict.all = T,
+                     num.threads=0)$predictions
+  
+  #compute in which trees a sample is oob
+  oob <- do.call("cbind",rf$inbag.counts)==0
+  
+  #compute the allele frequencies for the oob samples per tree
+  global_alleles <- sort(unique(unlist(x)))
+  af_by_tree <- lapply(1:rf$num.trees,FUN=function(nt){
+    x_t <- x[oob[,nt],]
+    allele_counts <- sapply(global_alleles,FUN=function(a){
+      colSums(x_t==a,na.rm=T)
+    })
+    allele_freqs <- t(t(allele_counts)/rowSums(allele_counts))
+  })
+  af_by_tree <- do.call("abind",list(x=af_by_tree,along=3))
+  
+  #compute the prediction error for each sample in each tree
+  oob_error <- (preds_y-y)^2
+  
+  #remove the estimate for those trees where the sample is in bag
+  oob_error[!oob] <- NA
+  
+  #how many nodes can there be in a tree
+  max_node <- max(preds_real)
+  
+  #for each node compute the oob error
+  node_error_oob <- sapply(1:rf$num.trees,FUN=function(nt){
+    out <- rep(NA,max_node)
+    preds_real_nt <- preds_real[,nt]
+    preds_real_nt[!oob[,nt]] <- NA
+    occ_nodes <- unique(sort(preds_real_nt))
+    in_node <- outer(preds_real_nt,occ_nodes,"==")
+    #in_node[is.na(in_node)] <- F
+    errors <- colSums(in_node*oob_error[,nt],na.rm=T)/colSums(in_node,na.rm=T)
+    out[occ_nodes] <- errors
+    return(out)
+  })
+  
+  #for each tree and sample find the oob error and make it in a matrix with 
+  #the original dimensions
+  oob_real <- matrix(node_error_oob[cbind(as.vector(preds_real),
+                                     rep(1:rf$num.trees,each=length(y)))],
+                     nrow=length(y))
+  
+  #set the inbag predictions to NA
+  oob_real[!oob] <- NA
+  
+  #make a matrix for correction factors
+  cor_mat <- matrix(NA,nrow=ncol(x),
+                    ncol=nrow(x))
+  
+  #for each marker compute the correction factors for each sample
+  for(m in 1:ncol(x)){
+    afreq_m <- af_by_tree[m,,]
+    if(length(which(abs(imps[m,])>0))==0){
+      cor_mat[m,] <- 0
+    }else{
+      x_m <- x
+      a_preds <- lapply(1:length(global_alleles),FUN=function(i){
+        a <- global_alleles[i]
+        if(sum(afreq_m[i,])==0){
+          return(matrix(0,nrow=nrow(x),ncol=rf$num.trees))
+        }
+        x_m[,m] <- a
+        preds_a <- predict(object = rf,
+                           data = x_m,
+                           predict.all = T,
+                           type="terminalNodes",
+                           num.threads=0)$predictions
+        oob_a <- matrix(node_error_oob[cbind(as.vector(preds_a),
+                                             rep(1:rf$num.trees,
+                                                 each=length(y)))],
+                        nrow=length(y))
+        out <- t(t(oob_a)*afreq_m[i,])
+        return(out)
+      })
+      exp_err <- Reduce("+",a_preds)-oob_real
+      exp_err <- rowSums(exp_err,na.rm=T)/rf$num.trees
+      cor_mat[m,] <- exp_err
+    }
+    
+  }
+  imps <- imps-cor_mat
+  return(imps)
+}
+
+recompute_imps <- function(rf,x,y){
+  
+  #find out in which node a sample will end up in without permutations
+  preds_real <- predict(object = rf,
+                        data = x,
+                        predict.all = T,
+                        type="terminalNodes",
+                        num.threads=0)$predictions
+  
+  #see what a samples prediction would be without any permutations
+  preds_y <- predict(object = rf,
+                     data = x,
+                     predict.all = T,
+                     num.threads=0)$predictions
+  y_error <- (preds_y-y)^2
+  
+  #compute in which trees a sample is oob
+  oob <- do.call("cbind",rf$inbag.counts)==0
+  
+  #compute the allele frequencies for the oob samples per tree
+  global_alleles <- sort(unique(unlist(x)))
+  af_by_tree <- lapply(1:rf$num.trees,FUN=function(nt){
+    x_t <- x[oob[,nt],]
+    allele_counts <- sapply(global_alleles,FUN=function(a){
+      colSums(x_t==a,na.rm=T)
+    })
+    allele_freqs <- t(t(allele_counts)/rowSums(allele_counts))
+  })
+  af_by_tree <- do.call("abind",list(x=af_by_tree,along=3))
+  
+  #compute the prediction error for each sample in each tree
+  oob_error <- (preds_y-y)^2
+  
+  #remove the estimate for those trees where the sample is in bag
+  oob_error[!oob] <- NA
+  
+  #how many nodes can there be in a tree
+  max_node <- max(preds_real)
+  
+  #for each node compute the oob error
+  node_error_oob <- sapply(1:rf$num.trees,FUN=function(nt){
+    out <- rep(NA,max_node)
+    preds_real_nt <- preds_real[,nt]
+    preds_real_nt[!oob[,nt]] <- NA
+    occ_nodes <- unique(sort(preds_real_nt))
+    in_node <- outer(preds_real_nt,occ_nodes,"==")
+    #in_node[is.na(in_node)] <- F
+    errors <- colSums(in_node*oob_error[,nt],na.rm=T)/colSums(in_node,na.rm=T)
+    out[occ_nodes] <- errors
+    return(out)
+  })
+  
+  #for each tree and sample find the oob error and make it in a matrix with 
+  #the original dimensions
+  oob_real <- matrix(node_error_oob[cbind(as.vector(preds_real),
+                                          rep(1:rf$num.trees,each=length(y)))],
+                     nrow=length(y))
+  
+  #set the inbag predictions to NA
+  oob_real[!oob] <- NA
+  
+  #make a matrix for correction factors
+  imps <- matrix(NA,nrow=ncol(x),
+                    ncol=nrow(x))
+  
+  #for each marker compute the correction factors for each sample
+  for(m in 1:ncol(x)){
+    afreq_m <- af_by_tree[m,,]
+    x_m <- x
+    a_preds <- lapply(1:length(global_alleles),FUN=function(i){
+      a <- global_alleles[i]
+      if(sum(afreq_m[i,])==0){
+        return(matrix(0,nrow=nrow(x),ncol=rf$num.trees))
+      }
+      x_m[,m] <- a
+      preds_a <- predict(object = rf,
+                         data = x_m,
+                         predict.all = T,
+                         num.threads=0)$predictions
+      pred_error <- (preds_a-y)^2
+      out <- t(t(pred_error)*afreq_m[i,])
+      return(out)
+    })
+    perm_error <- Reduce("+",a_preds)
+    #perm_error <- (oob_pred-y)^2
+    perm_imp <- perm_error-y_error
+    perm_imp <- perm_imp*oob
+    imps[m,] <- rowMeans(perm_imp)
+    
+  }
+  return(imps)
 }
