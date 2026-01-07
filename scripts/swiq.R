@@ -47,7 +47,7 @@ swiq <- function(y,
   if(any(is.na(y))){
     na_bol <- is.na(y)
     y <- y[!na_bol]
-    x <- x[!na.bol,]
+    x <- x[!na_bol,]
   }
   imps <- get_imps(x = x,
                    y = y,
