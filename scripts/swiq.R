@@ -705,16 +705,17 @@ recompute_imps <- function(rf,x,y){
 swiq_lean <- function(y,
                       x,
                       num.trees=10000,
-                      num.threads=0,
+                      num.threads=NULL,
                       min.bucket=15,
-                      imp.blocks=1,
-                      freq_min=10,
-                      min_use=1){
+                      imp.blocks=1){
   #load requirements
   require(ranger)
   require(abind)
   
   # check all input
+  if(is.null(num.threads)){
+    num.threads <- imp.blocks
+  }
   
   # preprocess data
   if(!is.data.frame(x)){
@@ -730,14 +731,26 @@ swiq_lean <- function(y,
   # in blocks: determine the effect on accuracy of each marker for each sample and aggregate
   # can be one block. the total number of trees is distributed
   trees_by_block <- ceiling(num.trees/imp.blocks)
-  imp_mat_list <- lapply(1:imp.blocks,FUN=function(i){
-    i <<- i
+  
+  cl <- makeCluster(num.threads, type = "SOCK")
+  clusterExport(cl = cl,list = c("x",
+                                 "y",
+                                 "trees_by_block",
+                                 "min.bucket",
+                                 "get_importances"))
+  
+  invisible(clusterEvalQ(cl, library(ranger)))
+  invisible(clusterEvalQ(cl, library(abind)))
+  
+  imp_mat_list <- parLapply(cl = cl,x = 1:imp.blocks,fun=function(i){
+    #i <<- i
     get_importances(x=x,
                     y=y,
                     num.trees.block=trees_by_block,
                     num.threads=num.threads,
                     min.bucket=min.bucket)
   })
+  stopCluster(cl)
   
   # aggregate blocks
   imps <- Reduce("+",imp_mat_list)
@@ -766,10 +779,9 @@ get_importances <- function(x,
   # make the forest
   rf <- ranger(y = y,
                x = x,
-               importance="permutation",
-               local.importance = T,
+               importance="none",
                num.trees = num.trees.block,
-               num.threads = num.threads,
+               num.threads = 1,
                min.bucket = min.bucket,
                keep.inbag = T)
   
@@ -783,8 +795,10 @@ get_importances <- function(x,
                         data = x,
                         predict.all = T,
                         type="terminalNodes",
-                        num.threads=0)$predictions
+                        num.threads=1)$predictions
   max_node <- max(preds_real)
+  empty_out <- rep(0,max_node)
+  
   
   # extract the prediction of each terminal node
   node_pred <- sapply(1:rf$num.trees,FUN=function(nt){
@@ -814,7 +828,7 @@ get_importances <- function(x,
   preds_y <- predict(object = rf,
                      data = x,
                      predict.all = T,
-                     num.threads=0)$predictions
+                     num.threads=1)$predictions
   oob_error <- (preds_y-y)^2
   #oob_error[!oob] <- NA
   
@@ -839,7 +853,7 @@ get_importances <- function(x,
     return((node_pred_i-y[i])^2)
   })
   node_error_oob <- Reduce("+",node_error_oob)/(mean(oob)*length(y))
-
+  
   #for each tree and sample find the oob error and make it in a matrix with 
   #the original dimensions
   oob_real <- matrix(node_error_oob[cbind(as.vector(preds_real),
@@ -854,95 +868,115 @@ get_importances <- function(x,
                  ncol=nrow(x))
   
   #for each marker compute the correction factors for each sample
+  a_mloop <- proc.time()
   for(m in 1:ncol(x)){
-    m <<- m
     use_trees <- m_use[m,]
     if(sum(use_trees)==0){
       imps[m,] <- 0
-    }
-    rf_sub <- suppressWarnings(deforest(rf,!use_trees))
-    afreq_m <- af_by_tree[m,,]
-    x_m <- x
-    # a_preds <- lapply(1:length(global_alleles),FUN=function(i){
-    #   a <- global_alleles[i]
-    #   if(sum(afreq_m[i,])==0){
-    #     return(matrix(0,nrow=nrow(x),ncol=rf_sub$num.trees))
-    #   }
-    #   x_m[,m] <- a
-    #   nodes_a <- predict(object = rf_sub,
-    #                      data = x_m,
-    #                      predict.all = T,
-    #                      type="terminalNodes",
-    #                      num.threads=num.threads)$predictions
-    #   y_a <- matrix(node_pred[cbind(as.vector(nodes_a),
-    #                                 rep(which(use_trees),each=length(y)))],
-    #                 nrow=length(y))
-    #   oob_error_a <- matrix(node_error_oob[cbind(as.vector(nodes_a),
-    #                                              rep(which(use_trees),each=length(y)))],
-    #                         nrow=length(y))
-    #   y_a_big <- preds_y
-    #   y_a_big[,use_trees] <- y_a
-    #   
-    #   oob_error_a_big <- oob_real
-    #   oob_error_a_big[,use_trees] <- oob_error_a
-    #   
-    #   pred_error <- (y_a_big-y)^2-oob_error_a_big
-    #   
-    #   out <- t(t(pred_error)*afreq_m[i,])
-    #   return(out)
-    # })
-    # perm_error <- Reduce("+",a_preds)
-    # #perm_error <- (oob_pred-y)^2
-    # perm_imp <- perm_error-oob_error+oob_real
-    # perm_imp <- perm_imp*oob
-    # imps[m,] <- rowMeans(perm_imp,na.rm=T)
-    a_preds <- lapply(1:length(global_alleles),FUN=function(i){
-      a <- global_alleles[i]
-      if(sum(afreq_m[i,])==0){
-        return(matrix(0,nrow=nrow(x),ncol=rf_sub$num.trees))
+    }else{
+      rf_sub <- suppressWarnings(deforest(rf,!use_trees))
+      afreq_m <- af_by_tree[m,,]
+      x_m <- x
+      # a_preds <- lapply(1:length(global_alleles),FUN=function(i){
+      #   a <- global_alleles[i]
+      #   if(sum(afreq_m[i,])==0){
+      #     return(matrix(0,nrow=nrow(x),ncol=rf_sub$num.trees))
+      #   }
+      #   x_m[,m] <- a
+      #   nodes_a <- predict(object = rf_sub,
+      #                      data = x_m,
+      #                      predict.all = T,
+      #                      type="terminalNodes",
+      #                      num.threads=num.threads)$predictions
+      #   y_a <- matrix(node_pred[cbind(as.vector(nodes_a),
+      #                                 rep(which(use_trees),each=length(y)))],
+      #                 nrow=length(y))
+      #   oob_error_a <- matrix(node_error_oob[cbind(as.vector(nodes_a),
+      #                                              rep(which(use_trees),each=length(y)))],
+      #                         nrow=length(y))
+      #   y_a_big <- preds_y
+      #   y_a_big[,use_trees] <- y_a
+      #   
+      #   oob_error_a_big <- oob_real
+      #   oob_error_a_big[,use_trees] <- oob_error_a
+      #   
+      #   pred_error <- (y_a_big-y)^2-oob_error_a_big
+      #   
+      #   out <- t(t(pred_error)*afreq_m[i,])
+      #   return(out)
+      # })
+      # perm_error <- Reduce("+",a_preds)
+      # #perm_error <- (oob_pred-y)^2
+      # perm_imp <- perm_error-oob_error+oob_real
+      # perm_imp <- perm_imp*oob
+      # imps[m,] <- rowMeans(perm_imp,na.rm=T)
+      a_a_preds <- proc.time()
+      a_preds <- lapply(1:length(global_alleles),FUN=function(i){
+        a <- global_alleles[i]
+        if(sum(afreq_m[i,])==0){
+          return(matrix(0,nrow=nrow(x),ncol=rf_sub$num.trees))
+        }
+        x_m[,m] <- a
+        nodes_a <- predict(object = rf_sub,
+                           data = x_m,
+                           predict.all = T,
+                           type="terminalNodes",
+                           num.threads=1)$predictions
+        
+        y_a <- matrix(node_pred[cbind(as.vector(nodes_a),
+                                      rep(which(use_trees),each=length(y)))],
+                      nrow=length(y))
+        #nodes_a[!oob[,use_trees]] <- max_node+1
+        # oob_error_a <- matrix(node_error_oob[cbind(as.vector(nodes_a),
+        #                                            rep(which(use_trees),each=length(y)))],
+        #                       nrow=length(y))
+        error_a <- (y_a-y)^2
+        oob_m <- oob[,use_trees,drop=F]
+        empty_in_node <- matrix(F,nrow = nrow(x),ncol = max_node)
+        for(nt in 1:rf_sub$num.trees){
+          # in_node <- empty_in_node
+          # in_node[cbind(1:nrow(x),nodes_a[,nt])] <- T
+          # #in_node <- outer(nodes_a[,nt],1:max_node,"==")
+          # 
+          # in_node[!oob_m[,nt],] <- F
+          
+          #node_error_means <- colSums(in_node*error_a[,nt])/colSums(in_node)
+          hit_mat <- cbind(1:nrow(x),nodes_a[,nt])
+          hit_mat <- hit_mat[oob_m[,nt],]
+          
+          error_vec <- error_a[,nt]
+          node_error_means <- empty_out
+          for(j in 1:nrow(hit_mat)){
+            node_error_means[hit_mat[j,2]] <- node_error_means[hit_mat[j,2]]+error_vec[hit_mat[j,1]]
+          }
+          node_counts <- tabulate(hit_mat[,2],max_node)
+          node_error_means <- node_error_means/node_counts
+          
+          error_a[,nt] <- error_a[,nt]-node_error_means[nodes_a[,nt]]
+        }
+        
+        return(error_a)
+      })
+      a_preds <- do.call("abind",list(x=a_preds,along=3))
+      b_a_preds <- proc.time()
+      t_a_preds <- t_a_preds+(b_a_preds-a_a_preds)[3]
+      
+      real_error <- matrix(NA,nrow = nrow(x),ncol = rf_sub$num.trees)
+      blended_error <- matrix(0,nrow = nrow(x),ncol = rf_sub$num.trees)
+      for(i in 1:length(global_alleles)){
+        use_samples <- x[,m]==global_alleles[i]
+        real_error[use_samples,] <- a_preds[use_samples,,i]
+        
+        blended_error <- blended_error+t(t(a_preds[,,i])*afreq_m[,use_trees,drop=F][i,])
       }
-      x_m[,m] <- a
-      nodes_a <- predict(object = rf_sub,
-                         data = x_m,
-                         predict.all = T,
-                         type="terminalNodes",
-                         num.threads=num.threads)$predictions
+      diff_error <- blended_error-real_error
+      diff_error[!oob[,use_trees,drop=F]] <- 0
       
-      y_a <- matrix(node_pred[cbind(as.vector(nodes_a),
-                                    rep(which(use_trees),each=length(y)))],
-                    nrow=length(y))
-      #nodes_a[!oob[,use_trees]] <- max_node+1
-      # oob_error_a <- matrix(node_error_oob[cbind(as.vector(nodes_a),
-      #                                            rep(which(use_trees),each=length(y)))],
-      #                       nrow=length(y))
-      error_a <- (y_a-y)^2
-      for(nt in 1:rf_sub$num.trees){
-        in_node <- outer(nodes_a[,nt],1:max_node,"==")
-        in_node[!oob[,use_trees][,nt],] <- F
-        node_error_means <- colSums(in_node*error_a[,nt])/colSums(in_node)
-        error_a[,nt] <- error_a[,nt]-node_error_means[nodes_a[,nt]]
-      }
-      
-      
-      return(error_a)
-    })
-    a_preds <- do.call("abind",list(x=a_preds,along=3))
-    
-    real_error <- matrix(NA,nrow = nrow(x),ncol = rf_sub$num.trees)
-    blended_error <- matrix(0,nrow = nrow(x),ncol = rf_sub$num.trees)
-    for(i in 1:length(global_alleles)){
-      use_samples <- x[,m]==global_alleles[i]
-      real_error[use_samples,] <- a_preds[use_samples,,i]
-      
-      blended_error <- blended_error+t(t(a_preds[,,i])*afreq_m[,use_trees][i,])
+      imps[m,] <- rowMeans(diff_error)*mean(use_trees)
     }
-    diff_error <- blended_error-real_error
-    diff_error[!oob[,use_trees]] <- 0
     
-    imps[m,] <- rowMeans(diff_error)*mean(use_trees)
     
   }
-  
   
   # return the result matrices
   return(imps)
