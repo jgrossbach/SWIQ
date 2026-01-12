@@ -707,7 +707,8 @@ swiq_lean <- function(y,
                       num.trees=10000,
                       num.threads=NULL,
                       min.bucket=15,
-                      imp.blocks=1){
+                      imp.blocks=1,
+                      max.trees=1000){
   #load requirements
   require(ranger)
   require(abind)
@@ -730,14 +731,15 @@ swiq_lean <- function(y,
   
   # in blocks: determine the effect on accuracy of each marker for each sample and aggregate
   # can be one block. the total number of trees is distributed
-  trees_by_block <- ceiling(num.trees/imp.blocks)
+  trees_by_block <- num.trees
   
   cl <- makeCluster(num.threads, type = "SOCK")
   clusterExport(cl = cl,list = c("x",
                                  "y",
                                  "trees_by_block",
                                  "min.bucket",
-                                 "get_importances"))
+                                 "get_importances",
+                                 "max.trees"))
   
   invisible(clusterEvalQ(cl, library(ranger)))
   invisible(clusterEvalQ(cl, library(abind)))
@@ -748,7 +750,8 @@ swiq_lean <- function(y,
                     y=y,
                     num.trees.block=trees_by_block,
                     num.threads=num.threads,
-                    min.bucket=min.bucket)
+                    min.bucket=min.bucket,
+                    max.trees=max.trees)
   })
   stopCluster(cl)
   
@@ -766,7 +769,8 @@ get_importances <- function(x,
                             y,
                             num.trees.block,
                             num.threads,
-                            min.bucket){
+                            min.bucket,
+                            max.trees){
   #impute NAs
   x <- apply(x,2,FUN=function(m){
     if(any(is.na(m))){
@@ -785,10 +789,32 @@ get_importances <- function(x,
                min.bucket = min.bucket,
                keep.inbag = T)
   
+  #compute in which trees a sample is oob
+  # this has to be computed before deforestation
+  oob <- do.call("cbind",rf$inbag.counts)==0
+  
   # which markers were used where?
-  m_use <- sapply(1:rf$num.trees,FUN=function(nt){
+  m_use_orig <- sapply(1:rf$num.trees,FUN=function(nt){
     (1:ncol(x))%in%(treeInfo(rf,nt)$splitvarID+1)
   })
+  
+  # reduce the forest to the usefull trees
+  m_use_cum <- t(apply(m_use_orig,1,cumsum))
+  usefull <- c(T,sapply(2:rf$num.trees,FUN=function(nt){
+    any((m_use_cum[,nt]>m_use_cum[,nt-1])&m_use_cum[,nt]<(max.trees+1))
+  }))
+  rf <- suppressWarnings(deforest(rf,which(!usefull)))
+  m_use <- m_use_orig[,usefull]
+  oob <- oob[,usefull]
+  
+  # identify the first x trees each marker was used
+  too_many_trees <- rowSums(m_use)>max.trees
+  if(any(too_many_trees)){
+    for(m in which(too_many_trees)){
+      last_tree <- which(m_use[m,])[max.trees]
+      m_use[m,(last_tree+1):rf$num.trees] <- F
+    }
+  }
   
   # compute in which node each sample would end up in
   preds_real <- predict(object = rf,
@@ -809,18 +835,21 @@ get_importances <- function(x,
     return(out)
   })
   
-  #compute in which trees a sample is oob
-  oob <- do.call("cbind",rf$inbag.counts)==0
+  
   
   # compute the frequencies by tree and allele for OOB
   global_alleles <- sort(unique(unlist(x)))
+  amat <- lapply(global_alleles,FUN=function(a){
+    x==a
+  })
+  amat <- do.call("abind",list(x=amat,along=3))
   af_by_tree <- lapply(1:rf$num.trees,FUN=function(nt){
     nt <<- nt
     x_t <- x[oob[,nt],]
-    allele_counts <- sapply(global_alleles,FUN=function(a){
-      colSums(x_t==a,na.rm=T)
+    allele_freqs <- sapply(1:length(global_alleles),FUN=function(i){
+      colMeans(amat[,,i][oob[,nt],])
     })
-    allele_freqs <- t(t(allele_counts)/rowSums(allele_counts))
+    return(allele_freqs)
   })
   af_by_tree <- do.call("abind",list(x=af_by_tree,along=3))
   
@@ -868,13 +897,18 @@ get_importances <- function(x,
                  ncol=nrow(x))
   
   #for each marker compute the correction factors for each sample
-  a_mloop <- proc.time()
   for(m in 1:ncol(x)){
+    m <<- m
     use_trees <- m_use[m,]
+    # if(sum(use_trees)>max.trees){
+    #   use_trees_sub <- 1:length(use_trees)%in%(which(use_trees)[1:max.trees])
+    # }else{
+    #   use_trees_sub <- use_trees
+    # }
     if(sum(use_trees)==0){
       imps[m,] <- 0
     }else{
-      rf_sub <- suppressWarnings(deforest(rf,!use_trees))
+      rf_sub <- suppressWarnings(deforest(rf,!use_trees_sub))
       afreq_m <- af_by_tree[m,,]
       x_m <- x
       # a_preds <- lapply(1:length(global_alleles),FUN=function(i){
@@ -910,7 +944,6 @@ get_importances <- function(x,
       # perm_imp <- perm_error-oob_error+oob_real
       # perm_imp <- perm_imp*oob
       # imps[m,] <- rowMeans(perm_imp,na.rm=T)
-      a_a_preds <- proc.time()
       a_preds <- lapply(1:length(global_alleles),FUN=function(i){
         a <- global_alleles[i]
         if(sum(afreq_m[i,])==0){
@@ -924,14 +957,14 @@ get_importances <- function(x,
                            num.threads=1)$predictions
         
         y_a <- matrix(node_pred[cbind(as.vector(nodes_a),
-                                      rep(which(use_trees),each=length(y)))],
+                                      rep(which(use_trees_sub),each=length(y)))],
                       nrow=length(y))
         #nodes_a[!oob[,use_trees]] <- max_node+1
         # oob_error_a <- matrix(node_error_oob[cbind(as.vector(nodes_a),
         #                                            rep(which(use_trees),each=length(y)))],
         #                       nrow=length(y))
         error_a <- (y_a-y)^2
-        oob_m <- oob[,use_trees,drop=F]
+        oob_m <- oob[,use_trees_sub,drop=F]
         empty_in_node <- matrix(F,nrow = nrow(x),ncol = max_node)
         for(nt in 1:rf_sub$num.trees){
           # in_node <- empty_in_node
@@ -958,8 +991,6 @@ get_importances <- function(x,
         return(error_a)
       })
       a_preds <- do.call("abind",list(x=a_preds,along=3))
-      b_a_preds <- proc.time()
-      t_a_preds <- t_a_preds+(b_a_preds-a_a_preds)[3]
       
       real_error <- matrix(NA,nrow = nrow(x),ncol = rf_sub$num.trees)
       blended_error <- matrix(0,nrow = nrow(x),ncol = rf_sub$num.trees)
@@ -967,12 +998,12 @@ get_importances <- function(x,
         use_samples <- x[,m]==global_alleles[i]
         real_error[use_samples,] <- a_preds[use_samples,,i]
         
-        blended_error <- blended_error+t(t(a_preds[,,i])*afreq_m[,use_trees,drop=F][i,])
+        blended_error <- blended_error+t(t(a_preds[,,i])*afreq_m[,use_trees_sub,drop=F][i,])
       }
       diff_error <- blended_error-real_error
-      diff_error[!oob[,use_trees,drop=F]] <- 0
+      diff_error[!oob[,use_trees_sub,drop=F]] <- 0
       
-      imps[m,] <- rowMeans(diff_error)*mean(use_trees)
+      imps[m,] <- rowMeans(diff_error)*mean(m_use_orig[m,])
     }
     
     
