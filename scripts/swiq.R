@@ -198,10 +198,10 @@ gg_dotplot <- function(x, y,
 swiq <- function(y,
                  x,
                  num.trees=10000,
-                 num.threads=NULL,
+                 num.threads=1,
                  min.bucket=15,
                  imp.blocks=1,
-                 max.trees=1000){
+                 max.trees=Inf){
   #load requirements
   require(ranger)
   require(abind)
@@ -370,9 +370,10 @@ get_importances <- function(x,
   #amat <- do.call("abind", c(amat, list(along = 3)))
   amat <- abind(amat,along=3)
   
+  tx <- t(x)
   af_by_tree <- mclapply(1:rf$num.trees,mc.cores = num.threads,FUN=function(nt){
     nt <<- nt
-    x_t <- x[oob[,nt],]
+    x_t <- t(tx[,oob[,nt]])
     allele_freqs <- sapply(1:length(global_alleles),FUN=function(i){
       colMeans(amat[,,i][oob[,nt],])
     })
