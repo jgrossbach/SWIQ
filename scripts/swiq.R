@@ -1,47 +1,3 @@
-###QTL_profile##################################################################
-#plot the p-values for a single trait
-#Arguments:
-#           QTLlist: output of QTLgrouper
-#           predictorLocs: location of predictors in the genome in absolute 
-#                          cummulative positions
-#           chrLen: vector containing the length of each chromosome with names
-#           xlab: desired label for the x-axis
-#           ylab: desired label for the y-axis
-#           main: desired main-title
-QTL_profile <- function(p_vec,
-                        predictorLocs,
-                        chrLen,
-                        xlab,
-                        ylab,
-                        main,
-                        col="black",
-                        labcex=0.6,
-                        chrLty=2,
-                        chrCol="red"){
-  plot.default(y = -log10(p_vec),
-               x = predictorLocs,
-               main = main,
-               xlab = xlab,
-               ylab = ylab,
-               type = "h",
-               col = col,
-               xaxt = "n",
-               cex.lab=labcex)
-  chrLenCum <- sapply(1:length(chrLen),FUN=function(x){
-    sum(chrLen[1:x])
-  })
-  for(i in 1:(length(chrLenCum)-1)){
-    abline(v=chrLenCum[i],lty=chrLty,col=chrCol)
-  }
-  borders <- c(0,chrLenCum)
-  for(i in 1:length(chrLen)){
-    mtext(names(chrLen[i]),
-          side=1,
-          at=mean(borders[i:(i+1)]),
-          cex=par()$cex*labcex*0.75)
-  }
-}
-
 swiq <- function(y,
                  x,
                  num.trees=10000,
@@ -195,25 +151,25 @@ get_importances <- function(x,
   })
   af_by_tree <- abind(af_by_tree,along = 3)
   
-  # compute the original oob errors for each sample and tree
-  preds_y <- predict(object = rf,
-                     data = x,
-                     predict.all = T,
-                     num.threads=num.threads)$predictions
-  oob_error <- (preds_y-y)^2
-  
-  node_error_oob <- lapply(1:length(y),FUN=function(i){
-    node_pred_i <- node_pred
-    node_pred_i[,!oob[i,]] <- 0
-    return((node_pred_i-y[i])^2)
-  })
-  node_error_oob <- Reduce("+",node_error_oob)/(mean(oob)*length(y))
-  
-  #for each tree and sample find the oob error and make it in a matrix with 
-  #the original dimensions
-  oob_real <- matrix(node_error_oob[cbind(as.vector(preds_real),
-                                          rep(1:rf$num.trees,each=length(y)))],
-                     nrow=length(y))
+  # # compute the original oob errors for each sample and tree
+  # preds_y <- predict(object = rf,
+  #                    data = x,
+  #                    predict.all = T,
+  #                    num.threads=num.threads)$predictions
+  # oob_error <- (preds_y-y)^2
+  # 
+  # node_error_oob <- lapply(1:length(y),FUN=function(i){
+  #   node_pred_i <- node_pred
+  #   node_pred_i[,!oob[i,]] <- 0
+  #   return((node_pred_i-y[i])^2)
+  # })
+  # node_error_oob <- Reduce("+",node_error_oob)/(mean(oob)*length(y))
+  # 
+  # #for each tree and sample find the oob error and make it in a matrix with 
+  # #the original dimensions
+  # oob_real <- matrix(node_error_oob[cbind(as.vector(preds_real),
+  #                                         rep(1:rf$num.trees,each=length(y)))],
+  #                    nrow=length(y))
   
   # for each marker compute which node a sample would end up in for every 
   # allele and aggregate in a weighted manner

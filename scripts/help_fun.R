@@ -165,3 +165,47 @@ gg_dotplot <- function(x, y,
   
   return(p)
 }
+
+###QTL_profile##################################################################
+#plot the p-values for a single trait
+#Arguments:
+#           QTLlist: output of QTLgrouper
+#           predictorLocs: location of predictors in the genome in absolute 
+#                          cummulative positions
+#           chrLen: vector containing the length of each chromosome with names
+#           xlab: desired label for the x-axis
+#           ylab: desired label for the y-axis
+#           main: desired main-title
+QTL_profile <- function(p_vec,
+                        predictorLocs,
+                        chrLen,
+                        xlab,
+                        ylab,
+                        main,
+                        col="black",
+                        labcex=0.6,
+                        chrLty=2,
+                        chrCol="red"){
+  plot.default(y = -log10(p_vec),
+               x = predictorLocs,
+               main = main,
+               xlab = xlab,
+               ylab = ylab,
+               type = "h",
+               col = col,
+               xaxt = "n",
+               cex.lab=labcex)
+  chrLenCum <- sapply(1:length(chrLen),FUN=function(x){
+    sum(chrLen[1:x])
+  })
+  for(i in 1:(length(chrLenCum)-1)){
+    abline(v=chrLenCum[i],lty=chrLty,col=chrCol)
+  }
+  borders <- c(0,chrLenCum)
+  for(i in 1:length(chrLen)){
+    mtext(names(chrLen[i]),
+          side=1,
+          at=mean(borders[i:(i+1)]),
+          cex=par()$cex*labcex*0.75)
+  }
+}

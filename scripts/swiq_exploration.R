@@ -210,7 +210,51 @@ if(overwrite){
   })
   sim_list$sim4 <- sim_cur
   
+  #sim5: have more than two alleles
+  n_hits <- 2
+  effect_size <- 1
+  sim_cur <- lapply(1:n_sims,FUN=function(i){
+    set.seed(i)
+    i <<- i
+    y <- rnorm(n_samples)
+    x <- matrix(0,ncol=n_markers,nrow=n_samples)
+    for(j in 1:ncol(x)){
+      x[,j] <- sample(c(0,1,2),size = n_samples,replace=T)
+    }
+    hits <- sample(1:n_markers,size = n_hits,replace = F)
+    for(j in 1:n_hits){
+      m <- hits[j]
+      affected <- x[,m]==1
+      if(j%%2==0){
+        y[affected] <- y[affected]+effect_size
+      }else{
+        y[affected] <- y[affected]-effect_size
+      }
+    }
+    hits_out <- rep(0,n_markers)
+    for(j in 1:n_hits){
+      hits_out[hits[j]] <- j
+    }
+    idx <- sample(1:n_samples,size = n_samples)
+    p1 <- swiq(y = y,
+               x = x,
+               num.trees = 5000,
+               num.threads = 20,
+               min.bucket = 1,
+               imp.blocks = 1)
+    p2 <- swiq(y = y[idx],
+               x = x,
+               num.trees = 5000,
+               num.threads = 20,
+               min.bucket = 1,
+               imp.blocks = 1)
+    return(cbind(hits_out,p1,p2))
+  })
+  sim_list$sim5 <- sim_cur
+  
   ###map real traits###
+  #real traits were mapped with an external script
+  system("Rscript scripts/swiq_eQTL.R")
   
   save(sim_list,
        file="data/swiq_exploration.RData")
@@ -345,3 +389,20 @@ gg_histogram(x = pvec_unperm,
              xlab = "p-value",
              ylab = "frequency",
              title = "permuted traits, markers without simulated effects")
+
+#sim5
+p_list <- lapply(1:length(sim_list$sim5),FUN=function(i){
+  plot_mat <- sim_list$sim1[[i]]
+  max_p <- max(-log10(plot_mat[,2:3]))
+  hits <- which(plot_mat[,1]!=0)
+  colvec <- ifelse(1:nrow(plot_mat)%in%hits,"red","black")
+  gg_dotplot(x = -log10(plot_mat[,2]),
+             y = -log10(plot_mat[,3]),
+             ylim=c(0,max_p),
+             xlim=c(0,max_p),
+             col=colvec,
+             xlab = "-log10(p), non permuted",
+             ylab = "-log10(p), permuted",
+             main = paste0("simulation ",i))
+  
+})
