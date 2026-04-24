@@ -14,10 +14,205 @@ randomEffects[1:200%%10!=0] <- 0
 for(m in 1:ncol(x)){
   y[x[,m]==0] <- y[x[,m]==0]+randomEffects[m]
 }
+x <- cbind(x,sapply(1:4,FUN=function(i){rnorm(nrow(x))}))
 x <- as.data.frame(x)
 effect_sizes <- sapply(1:ncol(x),FUN=function(m){
   mean(y[x[,m]==0])-mean(y[x[,m]==1])
 })
+
+
+
+ys <- sample(1:length(y),size = length(y)/2)
+y[ys] <- y[ys]+20
+
+
+rf <- ranger(y = y,
+             x = x,
+             importance="none",
+             local.importance = F,
+             num.trees = 5000,
+             num.threads = 1,
+             min.bucket = 15,keep.inbag = T,node.stats = T)
+
+
+x2 <- x[1:224,]
+a <- proc.time()
+for(i in 1:1000){
+  pred <- predict(rf,x2)
+}
+b <- proc.time()
+(b-a)[3]
+
+x1 <- x[1:112,]
+a <- proc.time()
+for(i in 1:1000){
+  pred <- predict(rf,x1)
+}
+b <- proc.time()
+(b-a)[3]
+
+set.seed(1)
+tst <- swiq(y = phenotype[18,],
+            x = genotype[,1:3593],
+            num.trees = 500,
+            num.threads = 1,
+            min.bucket = 15,
+            imp.blocks = 1)
+
+set.seed(1)
+tst2 <- swiq(y = phenotype[18,],
+            x = genotype[,1:3593],
+            num.trees = 500,
+            num.threads = 1,
+            min.bucket = 15,
+            imp.blocks = 1,
+            pop.str = as.data.frame(genotype[,3594:3600]))
+
+set.seed(1)
+tst3 <- swiq(y = phenotype[18,],
+            x = genotype[,1:3593],
+            num.trees = 500,
+            num.threads = 1,
+            min.bucket = 15,
+            imp.blocks = 1)
+
+set.seed(1)
+tst4 <- swiq(y = phenotype[18,],
+            x = genotype[,1:3593],
+            num.trees = 500,
+            num.threads = 1,
+            min.bucket = 15,
+            imp.blocks = 1,
+            pick.threshold = 0.001)
+
+a <- proc.time()
+tst5 <- get_importances(x = as.data.frame(genotype[,1:3593]),
+                        y = phenotype[18,],
+                        num.trees.block = 1000,
+                        num.threads = 1,
+                        min.bucket = 15,
+                        max.trees = Inf,
+                        min.trees = 1,
+                        pop.str = NULL,
+                        pick.threshold = 1)
+b <- proc.time()
+(b-a)[3]
+
+a <- proc.time()
+tst6 <- get_importances(x = as.data.frame(genotype[,1:3593]),
+                        y = phenotype[18,],
+                        num.trees.block = 1000,
+                        num.threads = 1,
+                        min.bucket = 15,
+                        max.trees = Inf,
+                        min.trees = 1,
+                        pop.str = NULL,
+                        pick.threshold = 0.0001)
+b <- proc.time()
+(b-a)[3]
+
+a <- proc.time()
+tst7 <- swiq(y = phenotype[18,],
+             x = genotype[,1:3593],
+             num.trees = 2500,
+             num.threads = 1,
+             min.bucket = 15,
+             imp.blocks = 4,
+             pick.threshold = 0.0001)
+b <- proc.time()
+(b-a)[3]
+
+out4 <- mclapply(X = 1:15,mc.cores = 15,FUN = function(i){
+  a <- proc.time()
+  tst7 <- swiq(y = phenotype[18,],
+               x = genotype[,1:3593],
+               num.trees = 2500,
+               num.threads = 1,
+               min.bucket = 15,
+               imp.blocks = 4,
+               pick.threshold = 0.01)
+  b <- proc.time()
+  return((b-a)[3])
+  
+})
+
+a <- proc.time()
+for(i in 1:1000){
+  pred <- predict(rf,x[1:224,])
+}
+b <- proc.time()
+(b-a)[3]
+
+x2 <- rbind(x,x)
+a <- proc.time()
+for(i in 1:1000){
+  pred <- predict(rf,x2)
+}
+b <- proc.time()
+(b-a)[3]
+
+x2 <- rbind(x,x)
+a <- proc.time()
+for(i in 1:1000){
+  pred <- predict(rf,x2)
+}
+b <- proc.time()
+(b-a)[3]
+
+rf2 <- deforest(rf,1:50)
+a <- proc.time()
+for(i in 1:100){
+  pred <- predict(rf2,x)
+}
+b <- proc.time()
+(b-a)[3]
+
+
+a <- proc.time()
+set.seed(1)
+imps <- get_importances(x = x,
+                        y=y,
+                        num.trees.block = 1000,
+                        num.threads = 1,
+                        min.bucket = 1,
+                        min.trees = 1,
+                        max.trees = Inf,
+                        pop.str = 201:204)
+b <- proc.time()
+(b-a)[3]
+
+a <- proc.time()
+set.seed(1)
+tst <- swiq(x = x,
+            y=y,
+            num.trees = 1000,
+            num.threads = 1,
+            min.bucket = 1,
+            min.trees = 1,
+            max.trees = Inf,
+            pop.str = 201:204)
+b <- proc.time()
+(b-a)[3]
+
+a <- proc.time()
+set.seed(1)
+tst2 <- swiq(x = x[,1:200],
+            y=y,
+            num.trees = 1000,
+            num.threads = 1,
+            min.bucket = 1,
+            min.trees = 1,
+            max.trees = Inf,
+            pop.str = NULL)
+b <- proc.time()
+(b-a)[3]
+
+a <- proc.time()
+set.seed(1)
+imps2 <- get_importances_2(x = x,y=y,num.trees.block = 1000,num.threads = 1,min.bucket = 1,min.trees = 1,max.trees = Inf)
+b <- proc.time()
+(b-a)[3]
+
 
 rf <- ranger(y = y,
              x = x,

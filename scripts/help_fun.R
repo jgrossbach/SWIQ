@@ -15,7 +15,12 @@ add_line <- function(p,
 
 #####histogramm with ggplot#####################################################
 gg_histogram <- function(x, breaks = 30, color = "steelblue",
-                         xlab = "Value", ylab = "Count", title = "Histogram") {
+                         xlab = "Value", ylab = "Count", title = "Histogram",
+                         title_size = 14,
+                         xlab_size = 12,
+                         ylab_size = 12,
+                         axis_text_size = 10) {
+  
   # Ensure x is numeric
   if (!is.numeric(x)) {
     stop("Input 'x' must be a numeric vector.")
@@ -26,32 +31,207 @@ gg_histogram <- function(x, breaks = 30, color = "steelblue",
   
   # Build and return the plot
   ggplot(df, aes(x = x)) +
-    geom_histogram(bins = breaks, fill = color, color = "black", alpha = 0.8) +
+    geom_histogram(
+      bins = breaks,
+      fill = color,
+      color = "black",
+      alpha = 0.8
+    ) +
     labs(title = title, x = xlab, y = ylab) +
-    theme_minimal(base_size = 14)
+    theme_minimal() +
+    theme(
+      plot.title = element_text(size = title_size),
+      axis.title.x = element_text(size = xlab_size),
+      axis.title.y = element_text(size = ylab_size),
+      axis.text.x = element_text(size = axis_text_size),
+      axis.text.y = element_text(size = axis_text_size)
+    )
 }
 
 #####barplot with ggplot########################################################
+# gg_barplot <- function(values, 
+#                        title = "Barplot", 
+#                        xlab = "Index", 
+#                        ylab = "Value", 
+#                        bar_color = "steelblue") {
+#   
+#   # Check if input is numeric
+#   if(!is.numeric(values)) {
+#     stop("Input 'values' must be a numeric vector.")
+#   }
+#   
+#   # Create a data frame for ggplot
+#   df <- data.frame(Index = seq_along(values), Value = values)
+#   
+#   # Create barplot using ggplot2
+#   p <- ggplot(df, aes(x = factor(Index), y = Value)) +
+#     geom_bar(stat = "identity", fill = bar_color) +
+#     labs(title = title, x = xlab, y = ylab) +
+#     theme_minimal() +
+#     theme(plot.title = element_text(hjust = 0.5))
+#   
+#   return(p)
+# }
+
 gg_barplot <- function(values, 
+                       bar_labels = NULL,
                        title = "Barplot", 
                        xlab = "Index", 
                        ylab = "Value", 
-                       bar_color = "steelblue") {
+                       bar_color = "steelblue",
+                       axis_text_size = 12,
+                       title_size = 16,
+                       xlab_size = 14,
+                       ylab_size = 14) {
   
   # Check if input is numeric
-  if(!is.numeric(values)) {
+  if (!is.numeric(values)) {
     stop("Input 'values' must be a numeric vector.")
   }
   
-  # Create a data frame for ggplot
-  df <- data.frame(Index = seq_along(values), Value = values)
+  # Use default labels if none are provided
+  if (is.null(bar_labels)) {
+    bar_labels <- seq_along(values)
+  }
+  
+  # Check labels length
+  if (length(bar_labels) != length(values)) {
+    stop("Length of 'bar_labels' must match length of 'values'.")
+  }
+  
+  # Create data frame for ggplot
+  df <- data.frame(
+    Label = factor(bar_labels, levels = bar_labels),
+    Value = values
+  )
   
   # Create barplot using ggplot2
-  p <- ggplot(df, aes(x = factor(Index), y = Value)) +
+  p <- ggplot(df, aes(x = Label, y = Value)) +
     geom_bar(stat = "identity", fill = bar_color) +
     labs(title = title, x = xlab, y = ylab) +
     theme_minimal() +
-    theme(plot.title = element_text(hjust = 0.5))
+    theme(
+      plot.title = element_text(
+        hjust = 0.5,
+        size = title_size
+      ),
+      axis.text.x = element_text(size = axis_text_size),
+      axis.text.y = element_text(size = axis_text_size),
+      axis.title.x = element_text(size = xlab_size),
+      axis.title.y = element_text(size = ylab_size)
+    )
+  
+  return(p)
+}
+
+gg_barplot_matrix <- function(x,
+                              pair_labels = NULL,
+                              title = "Barplot",
+                              xlab = "Index",
+                              ylab = "Value",
+                              bar_color = c("steelblue", "tomato"),
+                              legend_labels = NULL,
+                              show_legend = TRUE,
+                              axis_text_size = 12,
+                              title_size = 16,
+                              xlab_size = 14,
+                              ylab_size = 14,
+                              legend_text_size = 12,
+                              legend_title = "Group",
+                              within_pair_gap = 0.6,
+                              between_pair_gap = 1.4,
+                              bar_width = 0.5) {
+  
+  # Check input
+  if (!is.matrix(x) || !is.numeric(x)) {
+    stop("Input 'x' must be a numeric matrix.")
+  }
+  
+  values <- as.vector(x)   # column-wise order
+  
+  n_rows <- nrow(x)
+  n_cols <- ncol(x)
+  n_bars <- length(values)
+  
+  # Default pair labels
+  if (is.null(pair_labels)) {
+    pair_labels <- paste0("Group ", 1:n_cols)
+  }
+  
+  if (length(pair_labels) != n_cols) {
+    stop("Length of 'pair_labels' must match number of matrix columns.")
+  }
+  
+  # Row-based color recycling
+  row_colors <- rep(bar_color, length.out = n_rows)
+  fill_colors <- rep(row_colors, times = n_cols)
+  
+  # Default legend labels
+  if (is.null(legend_labels)) {
+    legend_labels <- paste0("Row ", 1:n_rows)
+  }
+  
+  if (length(legend_labels) != n_rows) {
+    stop("Length of 'legend_labels' must match number of matrix rows.")
+  }
+  
+  # Create custom x positions
+  positions <- c()
+  pair_centers <- c()
+  row_group <- c()
+  current_pos <- 1
+  
+  for (j in 1:n_cols) {
+    pair_pos <- c()
+    
+    for (i in 1:n_rows) {
+      positions <- c(positions, current_pos)
+      pair_pos <- c(pair_pos, current_pos)
+      row_group <- c(row_group, legend_labels[i])
+      
+      if (i < n_rows) {
+        current_pos <- current_pos + within_pair_gap
+      } else {
+        current_pos <- current_pos + between_pair_gap
+      }
+    }
+    
+    pair_centers <- c(pair_centers, mean(pair_pos))
+  }
+  
+  df <- data.frame(
+    xpos = positions,
+    Value = values,
+    Row = factor(row_group, levels = legend_labels)
+  )
+  
+  library(ggplot2)
+  
+  p <- ggplot(df, aes(x = xpos, y = Value, fill = Row)) +
+    geom_col(width = bar_width) +
+    scale_fill_manual(
+      values = setNames(row_colors, legend_labels),
+      name = legend_title
+    ) +
+    scale_x_continuous(
+      breaks = pair_centers,
+      labels = pair_labels
+    ) +
+    labs(title = title, x = xlab, y = ylab) +
+    theme_classic() +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = title_size),
+      axis.text.x = element_text(size = axis_text_size),
+      axis.text.y = element_text(size = axis_text_size),
+      axis.title.x = element_text(size = xlab_size),
+      axis.title.y = element_text(size = ylab_size),
+      legend.text = element_text(size = legend_text_size),
+      legend.title = element_text(size = legend_text_size)
+    )
+  
+  if (!show_legend) {
+    p <- p + theme(legend.position = "none")
+  }
   
   return(p)
 }
@@ -60,9 +240,14 @@ gg_boxplot <- function(x, y,
                        title = NULL, 
                        xlab = NULL, 
                        ylab = NULL, 
-                       fill = "steelblue",
+                       fill = "darkgreen",
                        box_labels = NULL,
-                       show_outliers = TRUE) {
+                       show_outliers = TRUE,
+                       title_size = 14,
+                       xlab_size = 12,
+                       ylab_size = 12,
+                       axis_text_size = 10) {
+  
   # Basic checks
   if (missing(x) | missing(y)) {
     stop("Please provide both x (grouping) and y (numeric vector).")
@@ -119,8 +304,17 @@ gg_boxplot <- function(x, y,
     }
   }
   
-  if (!is.null(xlab))  p <- p + xlab(xlab)
-  if (!is.null(ylab))  p <- p + ylab(ylab)
+  if (!is.null(xlab)) p <- p + xlab(xlab)
+  if (!is.null(ylab)) p <- p + ylab(ylab)
+  
+  # Text size controls
+  p <- p + theme(
+    plot.title = element_text(size = title_size),
+    axis.title.x = element_text(size = xlab_size),
+    axis.title.y = element_text(size = ylab_size),
+    axis.text.x = element_text(size = axis_text_size),
+    axis.text.y = element_text(size = axis_text_size)
+  )
   
   return(p)
 }
@@ -132,6 +326,7 @@ named_list <- function(name_vec){
   return(l)
 }
 
+
 gg_dotplot <- function(x, y,
                        col = "black",
                        main = NULL,
@@ -139,7 +334,12 @@ gg_dotplot <- function(x, y,
                        xlab = NULL,
                        ylab = NULL,
                        xlim = NULL,
-                       ylim = NULL) {
+                       ylim = NULL,
+                       main_size = 14,
+                       xlab_size = 12,
+                       ylab_size = 12,
+                       axis_text_x_size = 10,
+                       axis_text_y_size = 10) {
   
   # Load required package
   if (!requireNamespace("ggplot2", quietly = TRUE)) {
@@ -162,6 +362,15 @@ gg_dotplot <- function(x, y,
   if (!is.null(xlim) || !is.null(ylim)) {
     p <- p + ggplot2::coord_cartesian(xlim = xlim, ylim = ylim)
   }
+  
+  # Text size controls
+  p <- p + ggplot2::theme(
+    plot.title = ggplot2::element_text(size = main_size),
+    axis.title.x = ggplot2::element_text(size = xlab_size),
+    axis.title.y = ggplot2::element_text(size = ylab_size),
+    axis.text.x = ggplot2::element_text(size = axis_text_x_size),
+    axis.text.y = ggplot2::element_text(size = axis_text_y_size)
+  )
   
   return(p)
 }

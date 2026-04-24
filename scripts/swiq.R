@@ -5,7 +5,9 @@ swiq <- function(y,
                  min.bucket=15,
                  imp.blocks=1,
                  max.trees=Inf,
-                 min.trees=0){
+                 min.trees=0,
+                 pop.str=NULL,
+                 pick.threshold=1){
   #load requirements
   require(ranger)
   require(abind)
@@ -27,6 +29,9 @@ swiq <- function(y,
     x <- x[!na_bol,]
   }
   
+  if(length(y)<(2*min.bucket)){
+    return(rep(1,ncol(x)))
+  }
   # in blocks: determine the effect on accuracy of each marker for each sample and aggregate
   # can be one block. the total number of trees is distributed
   trees_by_block <- num.trees
@@ -39,7 +44,9 @@ swiq <- function(y,
                     num.threads=num.threads,
                     min.bucket=min.bucket,
                     max.trees=max.trees,
-                    min.trees=min.trees)
+                    min.trees=min.trees,
+                    pop.str=pop.str,
+                    pick.threshold=pick.threshold)
   })
   
   # aggregate blocks
@@ -58,8 +65,10 @@ get_importances <- function(x,
                             num.threads,
                             min.bucket,
                             max.trees,
-                            min.trees){
-  #impute NAs
+                            min.trees,
+                            pop.str,
+                            pick.threshold){
+  #impute NAs, including pop structure predictors
   x <- apply(x,2,FUN=function(m){
     if(any(is.na(m))){
       m[is.na(m)] <- sample(m[!is.na(m)],replace = T,size = sum(is.na(m)))
@@ -67,6 +76,17 @@ get_importances <- function(x,
     return(m)
   })
   x <- as.data.frame(x)
+  nx <- ncol(x)
+  if(!is.null(pop.str)){
+    x <- cbind(x,pop.str)
+    pop.str.ind <- (nx+1):ncol(x)
+    pop.str.names <- colnames(x)[pop.str.ind]
+  }else{
+    pop.str.ind <- NULL
+    pop.str.names <- NULL
+  }
+  
+  
   
   # make the forest
   rf <- ranger(y = y,
@@ -75,7 +95,8 @@ get_importances <- function(x,
                num.trees = num.trees.block,
                num.threads = num.threads,
                min.bucket = min.bucket,
-               keep.inbag = T)
+               keep.inbag = T,
+               always.split.variables = pop.str.names)
   
   #compute in which trees a sample is oob
   # this has to be computed before deforestation
@@ -86,6 +107,20 @@ get_importances <- function(x,
     (1:ncol(x))%in%(treeInfo(rf,nt)$splitvarID+1)
   })
   m_use_orig <- do.call("cbind",m_use_orig)
+  # Do not consider population structure predictors
+  # for which trees are interesting
+  m_use_orig[pop.str.ind,] <- F
+  
+  n_picked <- floor(mean(colSums(m_use_orig[1:nx,])))
+  p_pick <- n_picked/ncol(x)
+  
+  n_picked <- rowSums(m_use_orig[1:nx,])
+  med_picked <- median(n_picked)
+  
+  p_picked <- pbinom(q = n_picked-1,size = rf$num.trees,prob = med_picked/rf$num.trees,lower.tail = F)
+  picked <- p_picked<=pick.threshold
+  m_use_orig[1:nx,][!picked,] <- F
+  
   
   
   # reduce the forest to the usefull trees
@@ -134,9 +169,9 @@ get_importances <- function(x,
   
   
   # compute the frequencies by tree and allele for OOB
-  global_alleles <- sort(unique(unlist(x)))
+  global_alleles <- sort(unique(unlist(x[,setdiff(1:ncol(x),pop.str.ind)])))
   amat <- lapply(global_alleles,FUN=function(a){
-    x==a
+    x[,setdiff(1:ncol(x),pop.str.ind)]==a
   })
   amat <- abind(amat,along=3)
   
@@ -151,25 +186,6 @@ get_importances <- function(x,
   })
   af_by_tree <- abind(af_by_tree,along = 3)
   
-  # # compute the original oob errors for each sample and tree
-  # preds_y <- predict(object = rf,
-  #                    data = x,
-  #                    predict.all = T,
-  #                    num.threads=num.threads)$predictions
-  # oob_error <- (preds_y-y)^2
-  # 
-  # node_error_oob <- lapply(1:length(y),FUN=function(i){
-  #   node_pred_i <- node_pred
-  #   node_pred_i[,!oob[i,]] <- 0
-  #   return((node_pred_i-y[i])^2)
-  # })
-  # node_error_oob <- Reduce("+",node_error_oob)/(mean(oob)*length(y))
-  # 
-  # #for each tree and sample find the oob error and make it in a matrix with 
-  # #the original dimensions
-  # oob_real <- matrix(node_error_oob[cbind(as.vector(preds_real),
-  #                                         rep(1:rf$num.trees,each=length(y)))],
-  #                    nrow=length(y))
   
   # for each marker compute which node a sample would end up in for every 
   # allele and aggregate in a weighted manner
@@ -239,8 +255,7 @@ get_importances <- function(x,
     }
   })
   imps <- do.call("rbind",imps)
-  
+  imps <- imps[1:nx,]
   # return the result matrices
   return(imps)
 }
-

@@ -252,10 +252,6 @@ if(overwrite){
   })
   sim_list$sim5 <- sim_cur
   
-  ###map real traits###
-  #real traits were mapped with an external script
-  system("Rscript scripts/swiq_eQTL.R")
-  
   save(sim_list,
        file="data/swiq_exploration.RData")
 }else{
@@ -280,6 +276,31 @@ p_list <- lapply(1:length(sim_list$sim1),FUN=function(i){
              main = paste0("simulation ",i))
   
 })
+
+plot_mat <- do.call("rbind",sim_list[[1]])
+max_p <- max(-log10(plot_mat[,2:3]))
+hits <- which(plot_mat[,1]!=0)
+colvec <- ifelse(1:nrow(plot_mat)%in%hits,"red","black")
+gg_dotplot(x = -log10(plot_mat[,2]),
+           y = -log10(plot_mat[,3]),
+           ylim=c(0,max_p),
+           xlim=c(0,max_p),
+           col=colvec,
+           xlab = "-log10(p), non permuted",
+           ylab = "-log10(p), permuted",xlab_size = 20,ylab_size = 20,axis_text_x_size = 15,axis_text_y_size = 15)
+ggsave(filename = paste0(plot_path,"sim1_dotplot.png"))
+gg_boxplot(x = plot_mat[,1]!=0,
+           y = plot_mat[,2],
+           title = "",
+           xlab = "has effect",
+           box_labels = c("no","yes"),
+           ylab = "p-value",
+           title_size = 25,
+           xlab_size = 25,
+           ylab_size = 25,
+           axis_text_size = 20)
+ggsave(filename = paste0(plot_path,"sim1_boxplot.png"))
+
 
 pvec_unperm <- unlist(lapply(sim_list$sim1,FUN=function(plot_mat){
   return(plot_mat[plot_mat[,1]==0,2])
@@ -321,17 +342,34 @@ p_list <- lapply(1:length(sim_list$sim2),FUN=function(i){
   
 })
 
-pvec_perm <- unlist(lapply(sim_list$sim2,FUN=function(plot_mat){
-  return(plot_mat[plot_mat[,1]==0,3])
-}))
+# pvec_perm <- unlist(lapply(sim_list$sim2,FUN=function(plot_mat){
+#   return(plot_mat[plot_mat[,1]==0,2])
+# }))
 
-gg_histogram(x = pvec_perm,
+gg_histogram(x = plot_mat[,3],
              breaks = 20,
              color = "darkgreen",
              xlab = "p-value",
              ylab = "frequency",
-             title = "permuted traits, correlated markers without simulated effects")
+             title = "permuted traits, correlated markers without simulated effects",
+             xlab_size = 25,
+             axis_text_size = 20,
+             ylab_size = 25,
+             title_size = 25)
+ggsave(filename = paste0(plot_path,"sim2_hist.png"),width = 12)
 
+plot_mat <- do.call("rbind",sim_list[[2]])
+gg_boxplot(x = plot_mat[,1]!=0,
+           y = plot_mat[,2],
+           title = "",
+           xlab = "has effect",
+           box_labels = c("no","yes"),
+           ylab = "p-value",
+           title_size = 25,
+           xlab_size = 25,
+           ylab_size = 25,
+           axis_text_size = 20)
+ggsave(filename = paste0(plot_path,"sim2_boxplot.png"))
 #sim3
 p_list <- lapply(1:length(sim_list$sim3),FUN=function(i){
   plot_mat <- sim_list$sim3[[i]]
@@ -353,16 +391,14 @@ p_list <- lapply(1:length(sim_list$sim3),FUN=function(i){
              xlab = "MAF",
              ylab = "p-value")
 })
-pmat <- do.call("rbind",lapply(sim_list$sim3,FUN=function(mat){
-  mat[,3]
-}))
-pmat <- matrix(as.vector(pmat),ncol=5)
-gg_boxplot(x = rep(seq(0.1,0.5,0.1),each=nrow(pmat)),
-           y = as.vector(pmat),
-           title = "p-values of permuted traits",
-           xlab = "MAF",
-           ylab = "p-value")
-
+pmat <- do.call("rbind",sim_list$sim3)
+labels <- paste0(ifelse(pmat[,1]!=0,"effect","no effect"),"\n MAF=",pmat[,4])
+gg_boxplot(x = labels,
+           y = pmat[,2],
+           title = "",
+           xlab = "",
+           ylab = "p-value",axis_text_size = 15,ylab_size = 25)
+ggsave(filename =  paste0(plot_path,"sim3_boxplot.png"),width = 14)
 #sim4
 p_list <- lapply(1:length(sim_list$sim1),FUN=function(i){
   plot_mat <- cbind(sim_list$sim1[[i]][,2],
@@ -383,7 +419,7 @@ p_list <- lapply(1:length(sim_list$sim1),FUN=function(i){
 pvec_perm <- unlist(lapply(sim_list$sim4,FUN=function(plot_mat){
   return(plot_mat[plot_mat[,1]==0,3])
 }))
-gg_histogram(x = pvec_unperm,
+gg_histogram(x = pvec_perm,
              breaks = 20,
              color = "darkgreen",
              xlab = "p-value",
@@ -406,3 +442,12 @@ p_list <- lapply(1:length(sim_list$sim5),FUN=function(i){
              main = paste0("simulation ",i))
   
 })
+
+plot_mat <- do.call("rbind",sim_list$sim5)
+labels <- ifelse(plot_mat[,1]!=0,"effect","no effect")
+gg_boxplot(x = labels,
+           y = plot_mat[,2],
+           title = "",
+           xlab = "",
+           ylab = "p-value",axis_text_size = 20,ylab_size = 25)
+ggsave(filename =  paste0(plot_path,"sim5_boxplot.png"))
