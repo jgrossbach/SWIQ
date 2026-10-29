@@ -7,7 +7,8 @@ swiq <- function(y,
                  max.trees=Inf,
                  min.trees=0,
                  pop.str=NULL,
-                 pick.threshold=1){
+                 pick.threshold=1,
+                 mtry=floor(sqrt(ncol(x)))){
   #load requirements
   require(ranger)
   require(abind)
@@ -39,14 +40,15 @@ swiq <- function(y,
   imp_mat_list <- lapply(1:imp.blocks,FUN=function(i){
     #i <<- i
     get_importances(x=x,
-                      y=y,
-                      num.trees.block=trees_by_block,
-                      num.threads=num.threads,
-                      min.bucket=min.bucket,
-                      max.trees=max.trees,
-                      min.trees=min.trees,
-                      pop.str=pop.str,
-                      pick.threshold=pick.threshold)
+                    y=y,
+                    num.trees.block=trees_by_block,
+                    num.threads=num.threads,
+                    min.bucket=min.bucket,
+                    mtry=mtry,
+                    max.trees=max.trees,
+                    min.trees=min.trees,
+                    pop.str=pop.str,
+                    pick.threshold=pick.threshold)
   })
   
   # aggregate blocks
@@ -64,19 +66,20 @@ get_importances <- function(x,
                             num.trees.block,
                             num.threads,
                             min.bucket,
+                            mtry,
                             max.trees,
                             min.trees,
                             pop.str,
                             pick.threshold){
   #impute NAs, including pop structure predictors
-  x <- apply(x,2,FUN=function(m){
-    if(any(is.na(m))){
-      m[is.na(m)] <- sample(m[!is.na(m)],replace = T,size = sum(is.na(m)))
-    }
-    return(m)
-  })
-  x <- as.data.frame(x)
   nx <- ncol(x)
+  for(i in 1:nx){
+    if(any(is.na(x[,i]))){
+      x[is.na(x[,i]),i] <- sample(x[!is.na(x[,i]),i],
+                                  size=sum(is.na(x[,i])),
+                                  replace=T)
+    }
+  }
   if(!is.null(pop.str)){
     x <- cbind(x,pop.str)
     pop.str.ind <- (nx+1):ncol(x)
@@ -95,8 +98,10 @@ get_importances <- function(x,
                num.trees = num.trees.block,
                num.threads = num.threads,
                min.bucket = min.bucket,
+               mtry=mtry,
                keep.inbag = T,
-               always.split.variables = pop.str.names)
+               always.split.variables = pop.str.names,
+               respect.unordered.factors = "partition")
   
   #compute in which trees a sample is oob
   # this has to be computed before deforestation
@@ -180,25 +185,6 @@ get_importances <- function(x,
   })
   node_size_oob <- do.call("cbind",node_size_oob)
   
-  # compute the frequencies by tree and allele for OOB
-  global_alleles <- sort(unique(unlist(x[,setdiff(1:ncol(x),pop.str.ind)])))
-  amat <- lapply(global_alleles,FUN=function(a){
-    x[,setdiff(1:ncol(x),pop.str.ind)]==a
-  })
-  amat <- abind(amat,along=3)
-  
-  tx <- t(x)
-  af_by_tree <- mclapply(1:rf$num.trees,mc.cores = num.threads,FUN=function(nt){
-    #nt <<- nt
-    x_t <- t(tx[,oob[,nt]])
-    allele_freqs <- sapply(1:length(global_alleles),FUN=function(i){
-      colMeans(amat[,,i][oob[,nt],])
-    })
-    return(allele_freqs)
-  })
-  af_by_tree <- abind(af_by_tree,along = 3)
-  
-  
   # for each marker compute which node a sample would end up in for every 
   # allele and aggregate in a weighted manner
   
@@ -209,13 +195,19 @@ get_importances <- function(x,
       return(rep(0,nrow(x)))
     }else{
       rf_sub <- suppressWarnings(deforest(rf,!use_trees))
-      afreq_m <- af_by_tree[m,,]
       x_m <- x
+      fac <- is.factor(x[,m])
+      if(fac){
+        global_alleles <- levels(x[,m])
+      }else{
+        global_alleles <- unique(x[,m])
+      }
+      
       
       # compute in which node a sample would end up in given each 
       # possible allele
       node_array <- lapply(global_alleles,FUN=function(a){
-        x_m[,m] <- a
+        x_m[x[,m]!=a,m] <- a
         nodes_a <- predict(object = rf_sub,
                            data = x_m,
                            predict.all = T,
@@ -243,10 +235,10 @@ get_importances <- function(x,
       
       a_preds <- lapply(1:length(global_alleles),FUN=function(i){
         a <- global_alleles[i]
-        if(sum(afreq_m[i,])==0){
+        if(sum(x[,m]==a)==0){
           return(matrix(0,nrow=nrow(x),ncol=rf_sub$num.trees))
         }
-        x_m[,m] <- a
+        x_m[x[,m]!=a,m] <- a
         nodes_a <- predict(object = rf_sub,
                            data = x_m,
                            predict.all = T,
@@ -292,9 +284,27 @@ get_importances <- function(x,
       diff_error <- blended_error-real_error
       diff_error[!oob[,use_trees,drop=F]] <- 0
       
-      same <- apply(a_preds,
-                    seq_len(length(dim(a_preds)) - 1),
-                    function(z) length(unique(z)) == 1)
+      # same <- apply(a_preds,
+      #               seq_len(length(dim(a_preds)) - 1),
+      #               function(z) length(unique(z)) == 1)
+      d <- dim(a_preds)
+      same <- matrix(TRUE, nrow = d[1], ncol = d[2])
+      if(d[3] > 1){
+        first <- a_preds[,,1]
+        first_nan <- is.nan(first)
+        first_na  <- is.na(first) & !first_nan
+        for(i in 2:d[3]){
+          cur <- a_preds[,,i]
+          eq <- cur == first
+          nas <- which(is.na(eq))
+          if(length(nas)){
+            cur_nan <- is.nan(cur[nas])
+            eq[nas] <- (first_nan[nas] & cur_nan) |
+              (first_na[nas] & is.na(cur[nas]) & !cur_nan)
+          }
+          same <- same & eq
+        }
+      }
       diff_error[same] <- 0 #remove numerical issues
       
       return(rowMeans(diff_error)*mean(m_use_orig[m,]))
