@@ -47,9 +47,9 @@ Both scripts define a function called `swiq()`, so source only one of them.
 | `num.threads` | 1 | Threads for ranger and the per-marker step |
 | `min.bucket` | 15 | Minimum terminal node size |
 | `mtry` | `floor(sqrt(ncol(x)))` | Variables tried per split |
-| `imp.blocks` | 1 | Number of independent forests whose importances are summed |
+| `imp.blocks` | 1 | Number of independent forests whose importances are summed. Each forest imputes missing values separately. |
 | `max.trees` / `min.trees` | `Inf` / 0 | Upper and lower bounds on the trees used per marker |
-| `pick.threshold` | 1 | Only test markers chosen for splits significantly often (1 = test all) |
+| `pick.threshold` | 1 | P-value threshold. Only test markers chosen for splits significantly often (1 = test all, e.g. 0.01 = only test markers that were used much more often than expected by chance) |
 | `pop.str` | `NULL` | Covariates for population structure |
 
 The trait is standardized internally, and samples with a missing trait are dropped. Missing marker values are filled by sampling from observed values. If fewer than `2 * min.bucket` samples remain, all p-values are returned as 1.
